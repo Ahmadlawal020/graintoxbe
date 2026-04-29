@@ -1,14 +1,14 @@
 const app = require("./app");
 const mongoose = require("mongoose");
 const { logEvents } = require("./middleware/logger");
-const PORT = process.env.PORT || 5002;
+const PORT = process.env.PORT || 5001;
 
 const { CronJob } = require('cron');
 const https = require('https');
 const http = require('http');
 
 // Keep-alive cron job: runs every 14 minutes to prevent Render from sleeping
-const job = new CronJob('*/14 * * * *', function() {
+const job = new CronJob('*/14 * * * *', function () {
   const backendUrl = process.env.BACKEND_URL;
   if (backendUrl) {
     console.log(`Pinging ${backendUrl} to keep awake...`);

@@ -126,6 +126,11 @@ const submitKyc = asyncHandler(async (req, res) => {
 const getUserById = asyncHandler(async (req, res) => {
   const { id } = req.params;
 
+  // Security: Only allow users to fetch their own data, or allow Admins to fetch any user
+  if (req.user._id !== id && !req.roles?.includes("Admin")) {
+    return res.status(403).json({ message: "Access denied. You can only view your own profile." });
+  }
+
   const user = await User.findById(id)
     .select("-password")
     .lean();
@@ -221,7 +226,11 @@ const updateUser = asyncHandler(async (req, res) => {
     dateOfBirth,
     maritalStatus,
     bloodGroup,
+    gender,
+    department,
+    permissions,
     isActive,
+    status,
     updatedBy,
     ...otherFields
   } = req.body;
@@ -258,7 +267,14 @@ const updateUser = asyncHandler(async (req, res) => {
   user.bloodGroup = bloodGroup ?? user.bloodGroup;
   user.updatedBy = updatedBy ?? user.updatedBy;
   user.role = role ? (Array.isArray(role) ? role : [role]) : user.role;
-  user.isActive = typeof isActive === "boolean" ? isActive : user.isActive;
+  user.status = status ?? user.status;
+  
+  // Sync isActive with status if status was provided
+  if (status) {
+    user.isActive = status === "Active";
+  } else {
+    user.isActive = typeof isActive === "boolean" ? isActive : user.isActive;
+  }
 
   // ✅ Conditionally assign other dynamic fields
   for (const [key, value] of Object.entries(otherFields)) {
@@ -272,6 +288,14 @@ const updateUser = asyncHandler(async (req, res) => {
   }
 
   user.updatedAt = new Date();
+
+  // Log activity
+  user.activities.unshift({
+    action: "Administrative Update",
+    details: status ? `Account status changed to ${status}` : "Profile information modified by Admin",
+    timestamp: new Date(),
+  });
+  if (user.activities.length > 20) user.activities = user.activities.slice(0, 20);
 
   const updated = await user.save();
 

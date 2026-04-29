@@ -18,7 +18,7 @@ const storageSchema = new mongoose.Schema(
     },
     unit: { 
       type: String, 
-      default: "MT" 
+      default: "kg" 
     },
     warehouse: { 
       type: mongoose.Schema.Types.ObjectId, 

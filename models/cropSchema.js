@@ -6,7 +6,7 @@ const cropSchema = new mongoose.Schema(
     code: { type: String, required: true, unique: true },
     category: { type: String, required: true, enum: ["Cereal", "Legume", "Tuber", "Other"] },
     totalStock: { type: Number, default: 0 },
-    unit: { type: String, default: "MT" },
+    unit: { type: String, default: "kg" },
     pricePerUnit: { type: Number, required: true },
     priceChange: { type: Number, default: 0 }, 
     tokenSymbol: { type: String, required: true },

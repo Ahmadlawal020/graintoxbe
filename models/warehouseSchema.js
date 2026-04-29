@@ -4,7 +4,7 @@ const warehouseSchema = new mongoose.Schema(
   {
     name: { type: String, required: true },
     warehouseType: { type: String, enum: ["Silo", "Flat Store", "Cold Storage", "Open Yard"], default: "Silo" },
-    capacity: { type: Number, required: true }, // in Metric Tonnes
+    capacity: { type: Number, required: true }, // in kg
     availableCapacity: { type: Number },
     status: { type: String, enum: ["Active", "Maintenance", "Inactive"], default: "Active" },
     
@@ -32,7 +32,7 @@ const warehouseSchema = new mongoose.Schema(
     managerId: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
 
     // Financials
-    storageFeePerMT: { type: Number, default: 0 },
+    storageFeePerKg: { type: Number, default: 0 },
   },
   { timestamps: true }
 );

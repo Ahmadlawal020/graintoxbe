@@ -31,33 +31,11 @@ const initializeDeposit = asyncHandler(async (req, res) => {
 
     console.log(`[Finance] Paystack initialized. Reference: ${data.reference}`);
 
-    // Create a COMPLETED transaction record (Instant Verification)
-    const newTx = await Transaction.create({
-      user: user._id,
-      amount: amount,
-      type: "Wallet_Topup",
-      status: "Completed",
-      reference: data.reference,
-      description: "Wallet top-up (Instant Verification)",
-    });
-
-    console.log(`[Finance] Transaction created and COMPLETED in DB: ${newTx._id} with ref ${newTx.reference}`);
-
-    // Update user balance atomically
-    const updatedUser = await User.findByIdAndUpdate(
-      user._id,
-      { $inc: { walletBalance: amount } },
-      { new: true }
-    );
-
-    console.log(`[Finance] User ${user._id} balance updated instantly. New balance: ${updatedUser?.walletBalance}`);
-
     res.status(200).json({
       success: true,
-      message: "Deposit initiated and verified instantly",
+      message: "Deposit initiated. Please complete payment.",
       data: {
         ...data,
-        transactionId: newTx._id
       },
     });
   } catch (error) {
@@ -76,6 +54,10 @@ const initializeDeposit = asyncHandler(async (req, res) => {
 const instantDeposit = asyncHandler(async (req, res) => {
   const { amount } = req.body;
   const user = req.user;
+
+  if (process.env.NODE_ENV === "Production") {
+    return res.status(403).json({ success: false, message: "Instant deposit is only available in Development mode" });
+  }
 
   if (!amount || amount <= 0) {
     return res.status(400).json({ success: false, message: "Invalid amount" });
@@ -120,68 +102,97 @@ const verifyDeposit = asyncHandler(async (req, res) => {
   console.log(`[Finance] Verifying transaction with ref: ${reference}`);
 
   try {
-    // Check if it's an instant reference
-    if (reference.startsWith("INST-")) {
-      const transaction = await Transaction.findOne({ reference });
-      if (transaction && transaction.status === "Completed") {
-        return res.json({ success: true, message: "Instant deposit already completed", data: transaction });
-      }
+    // 1. Check if transaction already exists and is completed in our DB
+    let transaction = await Transaction.findOne({ reference });
+    if (transaction && transaction.status === "Completed") {
+      console.log(`[Finance] Transaction ${reference} already completed in DB.`);
+      return res.json({ success: true, message: "Transaction already processed", data: transaction });
     }
 
+    // 2. If it's an instant reference but not completed (shouldn't happen with valid logic)
+    if (reference.startsWith("INST-") && (!transaction || transaction.status !== "Completed")) {
+      // logic for instant...
+    }
+
+    // 3. Verify with Paystack
     const data = await paystackService.verifyTransaction(reference);
     console.log(`[Finance] Paystack verify response for ${reference}: status=${data.status}, amount=${data.amount}`);
 
     if (data.status === "success") {
-      let transaction = await Transaction.findOne({ reference });
+      // Re-fetch or use existing to ensure we have the latest state
+      if (!transaction) {
+        transaction = await Transaction.findOne({ reference });
+      }
 
       if (!transaction) {
-        console.warn(`[Finance] Transaction NOT FOUND for ref: ${reference}. Creating it now as Completed (Instant).`);
-        // If it's successful in Paystack but not in our DB, create it now
-        transaction = await Transaction.create({
-          user: user._id,
-          amount: data.amount / 100,
-          type: "Wallet_Topup",
-          status: "Completed",
-          reference: reference,
-          description: "Wallet top-up (Recovered)",
-        });
-        
-        await User.findByIdAndUpdate(
-          user._id,
-          { $inc: { walletBalance: data.amount / 100 } }
-        );
-        
-        return res.json({ success: true, message: "Payment verified and record created", data: transaction });
+        try {
+          console.log(`[Finance] Creating NEW transaction record for ref: ${reference}`);
+          transaction = await Transaction.create({
+            user: user._id,
+            amount: data.amount / 100,
+            type: "Wallet_Topup",
+            status: "Completed",
+            reference: reference,
+            description: "Wallet Top-up via Paystack",
+          });
+          
+          console.log(`[Finance] Updating balance for user: ${user._id} by ${data.amount / 100}`);
+          const updatedUser = await User.findByIdAndUpdate(
+            user._id,
+            { $inc: { walletBalance: data.amount / 100 } },
+            { new: true }
+          );
+          
+          console.log(`[Finance] Balance update result: ${updatedUser ? "Success (New Balance: " + updatedUser.walletBalance + ")" : "FAILED - User not found"}`);
+          
+          return res.json({ success: true, message: "Payment verified and record created", data: transaction });
+        } catch (err) {
+          if (err.code === 11000) {
+            // If another process created it just now, find it and proceed
+            transaction = await Transaction.findOne({ reference });
+            if (transaction?.status === "Completed") {
+              return res.json({ success: true, message: "Transaction already processed", data: transaction });
+            }
+          } else {
+            throw err;
+          }
+        }
       }
 
-      if (transaction.status === "Completed") {
-        console.log(`[Finance] Transaction ${reference} already processed.`);
-        return res.json({ success: true, message: "Transaction already processed", data: transaction });
+      // Atomic update to prevent double-crediting/race conditions
+      const updatedTransaction = await Transaction.findOneAndUpdate(
+        { reference, status: { $ne: "Completed" } },
+        { $set: { status: "Completed" } },
+        { new: true }
+      );
+
+      if (!updatedTransaction) {
+        console.log(`[Finance] Transaction ${reference} was already marked as Completed or is being processed.`);
+        const existingTx = await Transaction.findOne({ reference });
+        return res.json({ success: true, message: "Transaction already processed", data: existingTx });
       }
 
-      // Update transaction status
-      transaction.status = "Completed";
-      await transaction.save();
-      console.log(`[Finance] Transaction ${reference} marked as Completed.`);
+      console.log(`[Finance] Transaction ${reference} atomically marked as Completed.`);
 
       // Update user balance atomically
+      console.log(`[Finance] Atomic update for existing transaction ${reference}. Target user: ${transaction?.user || user._id}`);
       const depositAmount = data.amount / 100; // Convert back from kobo
       const updatedUser = await User.findByIdAndUpdate(
-        transaction.user,
+        transaction?.user || user._id,
         { $inc: { walletBalance: depositAmount } },
         { new: true }
       );
 
       if (updatedUser) {
-        console.log(`[Finance] User ${transaction.user} balance updated. New balance: ${updatedUser.walletBalance}`);
+        console.log(`[Finance] User balance updated. New balance: ${updatedUser.walletBalance}`);
       } else {
-        console.error(`[Finance] User NOT FOUND for transaction ${reference}`);
+        console.error(`[Finance] FAILED to update balance for user: ${transaction?.user || user._id}`);
       }
 
       res.status(200).json({
         success: true,
         message: "Payment verified successfully",
-        data: transaction
+        data: updatedTransaction
       });
     } else {
       console.warn(`[Finance] Payment verification returned non-success status: ${data.status}`);
@@ -191,9 +202,9 @@ const verifyDeposit = asyncHandler(async (req, res) => {
         await transaction.save();
       }
 
-      res.status(200).json({
+      res.status(400).json({
         success: false,
-        message: `Payment status: ${data.status}`,
+        message: `Payment verification failed: ${data.status}`,
         data
       });
     }
@@ -254,28 +265,73 @@ const getFinancialSummary = asyncHandler(async (req, res) => {
 // @route   POST /api/finance/webhook
 // @access  Public
 const handleWebhook = asyncHandler(async (req, res) => {
+  const crypto = require("crypto");
+  const secret = process.env.PAYSTACK_SECRET_KEY;
+
+  // Verify signature using raw body for maximum security
+  const hash = crypto.createHmac("sha512", secret).update(req.rawBody).digest("hex");
+  if (hash !== req.headers["x-paystack-signature"]) {
+    console.error("[Finance Webhook] Invalid signature detected!");
+    return res.status(400).send("Invalid signature");
+  }
+
   const event = req.body;
+  console.log(`[Finance Webhook] Received event: ${event.event}`);
 
   if (event.event === "charge.success") {
-    const { reference, amount } = event.data;
-    console.log(`[Finance Webhook] Received success for ref: ${reference}, amount: ${amount}`);
+    const { reference, amount, metadata } = event.data;
+    console.log(`[Finance Webhook] Success for ref: ${reference}, amount: ${amount}`);
 
-    const transaction = await Transaction.findOne({ reference });
+    let transaction = await Transaction.findOne({ reference });
 
-    if (transaction && transaction.status !== "Completed") {
-      transaction.status = "Completed";
-      await transaction.save();
+    if (!transaction) {
+      console.log(`[Finance Webhook] Transaction record NOT FOUND for ref: ${reference}. Creating now from metadata.`);
+      const userId = metadata?.userId;
+      if (!userId) {
+        console.error("[Finance Webhook] No userId found in metadata!");
+        return res.status(400).send("No userId in metadata");
+      }
 
-      const depositAmount = amount / 100;
-      await User.findByIdAndUpdate(
-        transaction.user,
-        { $inc: { walletBalance: depositAmount } }
-      );
-      console.log(`[Finance Webhook] Transaction ${reference} completed and user balance updated.`);
-    } else if (transaction && transaction.status === "Completed") {
-      console.log(`[Finance Webhook] Transaction ${reference} was already completed.`);
+      try {
+        transaction = await Transaction.create({
+          user: userId,
+          amount: amount / 100,
+          type: "Wallet_Topup",
+          status: "Completed",
+          reference: reference,
+          description: "Wallet top-up (Webhook Created)",
+        });
+
+        await User.findByIdAndUpdate(
+          userId,
+          { $inc: { walletBalance: amount / 100 } }
+        );
+        console.log(`[Finance Webhook] Created new transaction and updated balance for user ${userId}`);
+      } catch (err) {
+        if (err.code === 11000) {
+          console.log("[Finance Webhook] Transaction record was created by another process, skipping.");
+        } else {
+          throw err;
+        }
+      }
     } else {
-      console.warn(`[Finance Webhook] Transaction NOT FOUND for reference: ${reference}`);
+      // Atomic update to prevent double-crediting
+      const updatedTx = await Transaction.findOneAndUpdate(
+        { reference, status: { $ne: "Completed" } },
+        { $set: { status: "Completed" } },
+        { new: true }
+      );
+
+      if (updatedTx) {
+        const depositAmount = amount / 100;
+        await User.findByIdAndUpdate(
+          transaction.user,
+          { $inc: { walletBalance: depositAmount } }
+        );
+        console.log(`[Finance Webhook] Transaction ${reference} atomically marked as Completed and balance updated.`);
+      } else {
+        console.log(`[Finance Webhook] Transaction ${reference} was already completed, skipping balance update.`);
+      }
     }
   }
 

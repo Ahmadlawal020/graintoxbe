@@ -169,8 +169,8 @@ const REFRESH_TOKEN_EXPIRES_IN = "1d";
 
 const cookieOptions = {
   httpOnly: true,
-  secure: true,
-  sameSite: "None",
+  secure: process.env.NODE_ENV === "Production",
+  sameSite: process.env.NODE_ENV === "Production" ? "None" : "Lax",
   maxAge: 24 * 60 * 60 * 1000, // 1 day
 };
 
@@ -194,6 +194,13 @@ const handleLogin = async (req, res) => {
       return res
         .status(404)
         .json({ message: "No account found with this email." });
+    }
+
+    // Check if account is suspended
+    if (user.status === "Suspended") {
+      return res.status(403).json({
+        message: "Your account has been suspended. Please contact support for more information."
+      });
     }
 
     // Convert stored role(s) to array
@@ -236,6 +243,16 @@ const handleLogin = async (req, res) => {
 
     // Save refresh token
     user.refreshToken = refreshToken;
+
+    // Log activity
+    user.activities.unshift({
+      action: "Login",
+      details: `Account accessed via ${role} login`,
+      timestamp: new Date(),
+      ip: req.ip || "Unknown",
+    });
+    if (user.activities.length > 20) user.activities = user.activities.slice(0, 20);
+
     await user.save();
 
     // Send refresh token in cookie & access token in response
@@ -377,7 +394,7 @@ const register = async (req, res) => {
 
     // Request OTP and store user data in metadata
     await otpService.requestOTP(email, "email", userData);
-    
+
     res.status(200).json({ message: "Verification code sent to your email." });
   } catch (err) {
     console.error("Register Error:", err);

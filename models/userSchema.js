@@ -55,11 +55,6 @@ const userSchema = new mongoose.Schema(
     // Profile Details
     farmLocation: String,
     cropTypes: [String],
-    investorTier: {
-      type: String,
-      enum: ["Bronze", "Gold", "Platinum"],
-      default: "Bronze",
-    },
     portfolioValue: { type: Number, default: 0 },
     tokensHeld: { type: Number, default: 0 },
     holdings: [
@@ -100,6 +95,14 @@ const userSchema = new mongoose.Schema(
     // Timestamps
     createdAt: { type: Date, default: Date.now },
     updatedAt: { type: Date, default: Date.now },
+    activities: [
+      {
+        action: String,
+        details: String,
+        timestamp: { type: Date, default: Date.now },
+        ip: String,
+      },
+    ],
   },
   { timestamps: true }
 );
