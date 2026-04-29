@@ -1,4 +1,4 @@
-const nodemailer = require("nodemailer");
+const { Resend } = require("resend");
 const OTP = require("../models/otpSchema");
 const crypto = require("crypto");
 
@@ -7,40 +7,20 @@ const crypto = require("crypto");
  */
 class OTPService {
   constructor() {
-    this.transporter = null;
+    this.resend = null;
   }
 
   /**
-   * Initializes the transporter if not already done
+   * Initializes the Resend client if not already done
    */
-  getTransporter() {
-    if (!this.transporter) {
-      const host = process.env.EMAIL_HOST || "smtp.gmail.com";
-      const port = parseInt(process.env.EMAIL_PORT) || 587;
-      
-      if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
-        console.error("❌ EMAIL_USER or EMAIL_PASS is missing in .env");
+  getResend() {
+    if (!this.resend) {
+      if (!process.env.RESEND_API_KEY) {
+        console.error("❌ RESEND_API_KEY is missing in .env");
       }
-
-      console.log(`📡 Initializing mail transporter: ${host}:${port} (secure: ${port === 465})`);
-
-      this.transporter = nodemailer.createTransport({
-        host: host,
-        port: port,
-        secure: port === 465, // true for 465, false for other ports (like 587)
-        auth: {
-          user: process.env.EMAIL_USER,
-          pass: process.env.EMAIL_PASS,
-        },
-        // Increase timeouts for cloud environments like Render
-        connectionTimeout: 15000, // 15 seconds
-        greetingTimeout: 15000,
-        socketTimeout: 20000,
-        // Force IPv4 if host is Gmail to avoid ENETUNREACH on IPv6
-        ...(host.includes("gmail") ? { family: 4 } : {}),
-      });
+      this.resend = new Resend(process.env.RESEND_API_KEY);
     }
-    return this.transporter;
+    return this.resend;
   }
 
   /**
@@ -62,32 +42,40 @@ class OTPService {
       ? "changing your password"
       : "verifying your email address";
 
-    const mailOptions = {
-      from: `"GrainTox App" <${process.env.EMAIL_USER}>`,
-      to: email,
-      subject: subject,
-      html: `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
-          <h2 style="color: #333; text-align: center;">${isPasswordChange ? "Reset Your Password" : "Verify Your Email"}</h2>
-          <p style="font-size: 16px; color: #555;">Hello,</p>
-          <p style="font-size: 16px; color: #555;">Use the following code for ${actionText}. This code is valid for 10 minutes.</p>
-          <div style="background-color: #f7f7f7; padding: 20px; text-align: center; font-size: 32px; font-weight: bold; letter-spacing: 5px; color: #2d3436; border-radius: 5px; margin: 20px 0;">
-            ${code}
-          </div>
-          <p style="font-size: 14px; color: #888; text-align: center;">If you didn't request this code, please ignore this email.</p>
-          <hr style="border: 0; border-top: 1px solid #eee; margin: 20px 0;">
-          <p style="font-size: 12px; color: #aaa; text-align: center;">&copy; 2024 GrainTox App. All rights reserved.</p>
-        </div>
-      `,
-    };
-
     try {
-      const transporter = this.getTransporter();
-      await transporter.sendMail(mailOptions);
-      console.log(`✅ OTP (${type}) sent to ${email}`);
+      const resend = this.getResend();
+      
+      // Note: If you haven't verified your domain on Resend, 
+      // you must use 'onboarding@resend.dev' and can only send to your own email.
+      const fromEmail = process.env.EMAIL_FROM || "onboarding@resend.dev";
+
+      const { data, error } = await resend.emails.send({
+        from: `GrainTox <${fromEmail}>`,
+        to: [email],
+        subject: subject,
+        html: `
+          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;">
+            <h2 style="color: #333; text-align: center;">${isPasswordChange ? "Reset Your Password" : "Verify Your Email"}</h2>
+            <p style="font-size: 16px; color: #555;">Hello,</p>
+            <p style="font-size: 16px; color: #555;">Use the following code for ${actionText}. This code is valid for 10 minutes.</p>
+            <div style="background-color: #f7f7f7; padding: 20px; text-align: center; font-size: 32px; font-weight: bold; letter-spacing: 5px; color: #2d3436; border-radius: 5px; margin: 20px 0;">
+              ${code}
+            </div>
+            <p style="font-size: 14px; color: #888; text-align: center;">If you didn't request this code, please ignore this email.</p>
+            <hr style="border: 0; border-top: 1px solid #eee; margin: 20px 0;">
+            <p style="font-size: 12px; color: #aaa; text-align: center;">&copy; 2024 GrainTox App. All rights reserved.</p>
+          </div>
+        `,
+      });
+
+      if (error) {
+        throw error;
+      }
+
+      console.log(`✅ OTP (${type}) sent to ${email} via Resend (ID: ${data.id})`);
       return true;
     } catch (error) {
-      console.error("❌ Error sending email:", error.message);
+      console.error("❌ Error sending email via Resend:", error.message || error);
       
       // Log the code anyway so the developer can see it in Render logs
       console.log(`[DEBUG] OTP Code for ${email}: ${code}`);
@@ -97,12 +85,7 @@ class OTPService {
         return true;
       }
       
-      // If we're on Render and getting ETIMEDOUT/ENETUNREACH, it's likely port blocking
-      if (error.code === 'ETIMEDOUT' || error.code === 'ESOCKET') {
-        console.error("💡 TIP: Render blocks SMTP ports (25, 465, 587) on Free plans. Switch to a paid plan or use an API-based service like SendGrid/Resend.");
-      }
-
-      throw new Error(`Failed to send ${type} OTP email: ${error.message}`);
+      throw new Error(`Failed to send ${type} OTP email: ${error.message || "Unknown error"}`);
     }
   }
 
