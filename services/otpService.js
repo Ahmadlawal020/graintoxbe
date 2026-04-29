@@ -15,17 +15,29 @@ class OTPService {
    */
   getTransporter() {
     if (!this.transporter) {
+      const host = process.env.EMAIL_HOST || "smtp.gmail.com";
+      const port = parseInt(process.env.EMAIL_PORT) || 587;
+      
       if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
         console.error("❌ EMAIL_USER or EMAIL_PASS is missing in .env");
       }
+
+      console.log(`📡 Initializing mail transporter: ${host}:${port} (secure: ${port === 465})`);
+
       this.transporter = nodemailer.createTransport({
-        host: process.env.EMAIL_HOST || "smtp.gmail.com",
-        port: process.env.EMAIL_PORT || 465,
-        secure: true,
+        host: host,
+        port: port,
+        secure: port === 465, // true for 465, false for other ports (like 587)
         auth: {
           user: process.env.EMAIL_USER,
           pass: process.env.EMAIL_PASS,
         },
+        // Increase timeouts for cloud environments like Render
+        connectionTimeout: 15000, // 15 seconds
+        greetingTimeout: 15000,
+        socketTimeout: 20000,
+        // Force IPv4 if host is Gmail to avoid ENETUNREACH on IPv6
+        ...(host.includes("gmail") ? { family: 4 } : {}),
       });
     }
     return this.transporter;
@@ -72,16 +84,25 @@ class OTPService {
     try {
       const transporter = this.getTransporter();
       await transporter.sendMail(mailOptions);
-      console.log(`OTP (${type}) sent to ${email}`);
+      console.log(`✅ OTP (${type}) sent to ${email}`);
       return true;
     } catch (error) {
-      console.error("Error sending email:", error);
-      // In development, we might not have email configured, so we'll log it
+      console.error("❌ Error sending email:", error.message);
+      
+      // Log the code anyway so the developer can see it in Render logs
+      console.log(`[DEBUG] OTP Code for ${email}: ${code}`);
+      
+      // In development, we return true to allow testing without working email
       if (process.env.NODE_ENV === "Development") {
-        console.log(`[DEV ONLY] OTP Code for ${email}: ${code}`);
         return true;
       }
-      throw new Error(`Failed to send ${type} OTP email`);
+      
+      // If we're on Render and getting ETIMEDOUT/ENETUNREACH, it's likely port blocking
+      if (error.code === 'ETIMEDOUT' || error.code === 'ESOCKET') {
+        console.error("💡 TIP: Render blocks SMTP ports (25, 465, 587) on Free plans. Switch to a paid plan or use an API-based service like SendGrid/Resend.");
+      }
+
+      throw new Error(`Failed to send ${type} OTP email: ${error.message}`);
     }
   }
 
