@@ -10,17 +10,19 @@ const {
   deleteWarehouse,
 } = require("../controllers/warehouseController");
 
+const { checkRole } = require("../middleware/roleMiddleware");
+
 router.use(verifyJWT);
 
 router.route("/")
   .get(getWarehouses)
-  .post(createWarehouse);
+  .post(checkRole(["Admin"]), createWarehouse);
 
-router.route("/my").get(getMyWarehouse);
+router.route("/my").get(checkRole(["Warehouse_Manager", "Admin"]), getMyWarehouse);
 
 router.route("/:id")
   .get(getWarehouseById)
-  .put(updateWarehouse)
-  .delete(deleteWarehouse);
+  .put(checkRole(["Admin"]), updateWarehouse)
+  .delete(checkRole(["Admin"]), deleteWarehouse);
 
 module.exports = router;

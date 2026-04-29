@@ -33,6 +33,16 @@ const storageSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId, 
       ref: "User"
     },
+    status: { 
+      type: String, 
+      enum: ["PENDING", "APPROVED", "REJECTED", "DEPOSITED", "CANCELLED"], 
+      default: "PENDING" 
+    },
+    deliveryMethod: {
+      type: String,
+      enum: ["DROP_OFF", "PICK_UP"],
+      default: "DROP_OFF"
+    },
     qcStatus: { 
       type: String, 
       enum: ["PASSED", "PENDING", "FAILED"], 

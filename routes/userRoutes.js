@@ -16,14 +16,7 @@ const {
 
 const verifyJWT = require("../middleware/verifyJWT");
 
-// Role-specific protection
-const isAdmin = (req, res, next) => {
-  if (req.roles && req.roles.includes("Admin")) {
-    next();
-  } else {
-    res.status(403).json({ message: "Require Admin Role" });
-  }
-};
+const { checkRole } = require("../middleware/roleMiddleware");
 
 router.use(verifyJWT);
 
@@ -40,10 +33,10 @@ router.post("/kyc/submit/:id", submitKyc);
 // Main route for CRUD on users
 router
   .route("/")
-  .get(isAdmin, getAllUsers)
-  .post(isAdmin, createUser)
+  .get(checkRole(["Admin"]), getAllUsers)
+  .post(checkRole(["Admin"]), createUser)
   .patch(updateUser)
-  .delete(isAdmin, deleteUser);
+  .delete(checkRole(["Admin"]), deleteUser);
 
 // GET /api/users/:id → get single user
 router.route("/:id").get(getUserById);
