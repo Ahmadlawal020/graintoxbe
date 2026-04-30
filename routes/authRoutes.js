@@ -7,6 +7,8 @@ const {
   checkEmail,
   register,
   verifyOTP,
+  forgotPassword,
+  resetPassword,
 } = require("../controllers/authController");
 
 // POST /auth/login
@@ -26,5 +28,11 @@ router.get("/refresh", handleRefreshToken);
 
 // POST /auth/logout
 router.post("/logout", handleLogout);
+
+// POST /auth/forgot-password
+router.post("/forgot-password", forgotPassword);
+
+// POST /auth/reset-password
+router.post("/reset-password", resetPassword);
 
 module.exports = router;

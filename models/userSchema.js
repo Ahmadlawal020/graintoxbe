@@ -85,6 +85,13 @@ const userSchema = new mongoose.Schema(
     receiveSMS: { type: Boolean, default: true },
     receiveEmail: { type: Boolean, default: true },
 
+    // Financial Details
+    bankAccount: {
+      bankName: String,
+      accountNumber: String,
+      accountName: String,
+    },
+
     // Status
     isActive: { type: Boolean, default: true },
 

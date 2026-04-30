@@ -12,6 +12,7 @@ const {
   updateKycStatus,
   submitKyc,
   getKycSubmissions,
+  changePassword,
 } = require("../controllers/userController");
 
 const verifyJWT = require("../middleware/verifyJWT");
@@ -29,6 +30,7 @@ router.get("/departments", getDepartments);
 router.get("/kyc", getKycSubmissions);
 router.patch("/kyc/:id", updateKycStatus);
 router.post("/kyc/submit/:id", submitKyc);
+router.post("/change-password", changePassword);
 
 // Main route for CRUD on users
 router

@@ -233,7 +233,7 @@ const getUserTransactions = asyncHandler(async (req, res) => {
 // @access  Private/Admin
 const getAllTransactions = asyncHandler(async (req, res) => {
   const transactions = await Transaction.find()
-    .populate("user", "firstName lastName email userId")
+    .populate("user", "firstName lastName email userId walletBalance")
     .sort({ createdAt: -1 });
   res.json(transactions);
 });
@@ -338,6 +338,98 @@ const handleWebhook = asyncHandler(async (req, res) => {
   res.status(200).send("Webhook Received");
 });
 
+// @desc    Request Withdrawal
+// @route   POST /api/finance/withdrawal/request
+// @access  Private
+const requestWithdrawal = asyncHandler(async (req, res) => {
+  const { amount, bankName, accountNumber, accountName } = req.body;
+  const user = req.user;
+
+  if (!amount || amount <= 0) {
+    return res.status(400).json({ success: false, message: "Invalid amount" });
+  }
+
+  // Check if user has sufficient balance
+  const dbUser = await User.findById(user._id);
+  if (dbUser.walletBalance < amount) {
+    return res.status(400).json({ success: false, message: "Insufficient balance" });
+  }
+
+  // Create pending transaction without deducting balance yet
+  // We only check if they HAVE enough right now to prevent frivolous requests
+  const transaction = await Transaction.create({
+    user: user._id,
+    amount,
+    type: "Withdrawal",
+    status: "Pending",
+    reference: `WD-${Date.now()}-${Math.random().toString(36).substring(7).toUpperCase()}`,
+    description: `Withdrawal request to ${bankName || dbUser.bankAccount?.bankName || "bank account"}`,
+    metadata: {
+      bankDetails: {
+        bankName: bankName || dbUser.bankAccount?.bankName,
+        accountNumber: accountNumber || dbUser.bankAccount?.accountNumber,
+        accountName: accountName || dbUser.bankAccount?.accountName,
+      }
+    }
+  });
+
+  // Update bank details if provided
+  if (bankName && accountNumber && accountName) {
+    dbUser.bankAccount = { bankName, accountNumber, accountName };
+    await dbUser.save();
+  }
+
+  res.status(201).json({
+    success: true,
+    message: "Withdrawal request submitted successfully",
+    data: transaction
+  });
+});
+
+// @desc    Process Withdrawal (Admin)
+// @route   POST /api/finance/admin/withdrawal/process
+// @access  Private/Admin
+const processWithdrawal = asyncHandler(async (req, res) => {
+  const { transactionId, status, notes } = req.body;
+
+  if (!["Completed", "Failed"].includes(status)) {
+    return res.status(400).json({ success: false, message: "Invalid status. Must be Completed or Failed." });
+  }
+
+  const transaction = await Transaction.findById(transactionId);
+  if (!transaction || transaction.type !== "Withdrawal") {
+    return res.status(404).json({ success: false, message: "Withdrawal transaction not found" });
+  }
+
+  if (transaction.status !== "Pending") {
+    return res.status(400).json({ success: false, message: "Transaction already processed" });
+  }
+
+  // If approved, deduct the user's balance
+  if (status === "Completed") {
+    const user = await User.findById(transaction.user);
+    if (!user || user.walletBalance < transaction.amount) {
+      return res.status(400).json({ 
+        success: false, 
+        message: "Approval failed: User no longer has sufficient balance." 
+      });
+    }
+    
+    user.walletBalance -= transaction.amount;
+    await user.save();
+  }
+
+  transaction.status = status;
+  if (notes) transaction.description += ` - Admin Note: ${notes}`;
+  await transaction.save();
+
+  res.json({
+    success: true,
+    message: `Withdrawal request ${status.toLowerCase()} successfully`,
+    data: transaction
+  });
+});
+
 module.exports = {
   initializeDeposit,
   verifyDeposit,
@@ -346,4 +438,6 @@ module.exports = {
   getAllTransactions,
   getFinancialSummary,
   handleWebhook,
+  requestWithdrawal,
+  processWithdrawal,
 };

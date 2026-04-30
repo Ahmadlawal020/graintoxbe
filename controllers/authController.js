@@ -257,7 +257,14 @@ const handleLogin = async (req, res) => {
 
     // Send refresh token in cookie & access token in response
     res.cookie("jwt", refreshToken, cookieOptions);
-    res.json({ id, roles, accessToken });
+    res.json({ 
+      id, 
+      roles, 
+      accessToken,
+      email: user.email,
+      firstName: user.firstName,
+      lastName: user.lastName
+    });
   } catch (err) {
     console.error("Login Error:", err);
     res.status(500).json({ message: "Internal Server Error" });
@@ -337,7 +344,14 @@ const handleRefreshToken = async (req, res) => {
           { expiresIn: ACCESS_TOKEN_EXPIRES_IN }
         );
 
-        res.json({ id, roles, accessToken });
+        res.json({ 
+          id, 
+          roles, 
+          accessToken, 
+          email: user.email, 
+          firstName: user.firstName, 
+          lastName: user.lastName 
+        });
       }
     );
   } catch (err) {
@@ -465,9 +479,82 @@ const verifyOTP = async (req, res) => {
     await user.save();
 
     res.cookie("jwt", refreshToken, cookieOptions);
-    res.json({ id, roles, accessToken, message: "Account created and verified successfully." });
+    res.json({ 
+      id, 
+      roles, 
+      accessToken, 
+      email: user.email,
+      firstName: user.firstName,
+      lastName: user.lastName,
+      message: "Account created and verified successfully." 
+    });
   } catch (err) {
     console.error("Verify OTP Error:", err);
+    res.status(500).json({ message: "Internal Server Error" });
+  }
+};
+
+// FORGOT PASSWORD (Send OTP)
+const forgotPassword = async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) {
+      return res.status(400).json({ message: "Email is required." });
+    }
+
+    const user = await User.findOne({ email });
+    if (!user) {
+      // We return 200 even if user doesn't exist to prevent email enumeration
+      return res.status(200).json({ message: "If an account exists with this email, a reset code has been sent." });
+    }
+
+    await otpService.requestOTP(email, "password_change");
+
+    res.status(200).json({ message: "Reset code sent to your email." });
+  } catch (err) {
+    console.error("Forgot Password Error:", err);
+    res.status(500).json({ message: "Internal Server Error" });
+  }
+};
+
+// RESET PASSWORD (Verify OTP & Update)
+const resetPassword = async (req, res) => {
+  try {
+    const { email, code, newPassword } = req.body;
+
+    if (!email || !code || !newPassword) {
+      return res.status(400).json({ message: "Email, code, and new password are required." });
+    }
+
+    const verification = await otpService.verifyOTP(email, code, "password_change");
+
+    if (!verification.success) {
+      return res.status(400).json({ message: verification.message });
+    }
+
+    const user = await User.findOne({ email });
+    if (!user) {
+      return res.status(404).json({ message: "User not found." });
+    }
+
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+    user.password = hashedPassword;
+    
+    // Clear refresh tokens to force re-login on all devices
+    user.refreshToken = "";
+    
+    user.activities.unshift({
+      action: "Password Reset",
+      details: "Password was reset via OTP verification",
+      timestamp: new Date(),
+      ip: req.ip || "Unknown",
+    });
+
+    await user.save();
+
+    res.status(200).json({ message: "Password reset successfully. You can now login with your new password." });
+  } catch (err) {
+    console.error("Reset Password Error:", err);
     res.status(500).json({ message: "Internal Server Error" });
   }
 };
@@ -479,4 +566,6 @@ module.exports = {
   checkEmail,
   register,
   verifyOTP,
+  forgotPassword,
+  resetPassword,
 };

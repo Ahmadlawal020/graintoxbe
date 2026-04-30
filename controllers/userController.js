@@ -142,12 +142,35 @@ const getUserById = asyncHandler(async (req, res) => {
   res.json(user);
 });
 
+// Helper to generate unique User ID
+const generateUserId = async (role) => {
+  const date = new Date();
+  const year = date.getFullYear();
+  const prefix = "GTX";
+  
+  // Find the last user created this year
+  const lastUser = await User.findOne({
+    userId: new RegExp(`^${prefix}-${year}-`),
+  }).sort({ createdAt: -1 });
+
+  let sequence = 1;
+  if (lastUser && lastUser.userId) {
+    const parts = lastUser.userId.split("-");
+    const lastSequence = parseInt(parts[parts.length - 1]);
+    if (!isNaN(lastSequence)) {
+      sequence = lastSequence + 1;
+    }
+  }
+
+  const paddedSequence = sequence.toString().padStart(4, "0");
+  return `${prefix}-${year}-${paddedSequence}`;
+};
+
 // @desc    Create new user
 // @route   POST /api/users
 // @access  Private
 const createUser = asyncHandler(async (req, res) => {
   const {
-    userId,
     firstName,
     lastName,
     email,
@@ -162,7 +185,7 @@ const createUser = asyncHandler(async (req, res) => {
     ...otherFields
   } = req.body;
 
-  if (!userId || !firstName || !lastName || !email || !password || !role) {
+  if (!firstName || !lastName || !email || !password || !role) {
     return res.status(400).json({ message: "Required fields missing." });
   }
 
@@ -171,15 +194,11 @@ const createUser = asyncHandler(async (req, res) => {
     return res.status(409).json({ message: "Email already in use." });
   }
 
-  const duplicateId = await User.findOne({ userId }).lean().exec();
-  if (duplicateId) {
-    return res.status(409).json({ message: "User ID already in use." });
-  }
-
   const hashedPassword = await bcrypt.hash(password, 10);
+  const generatedId = await generateUserId(role);
 
   const userObject = {
-    userId,
+    userId: generatedId,
     firstName,
     lastName,
     email,
@@ -322,6 +341,45 @@ const deleteUser = asyncHandler(async (req, res) => {
   });
 });
 
+// @desc    Change user password
+// @route   POST /api/users/change-password
+// @access  Private
+const changePassword = asyncHandler(async (req, res) => {
+  const { id, currentPassword, newPassword } = req.body;
+
+  if (!id || !currentPassword || !newPassword) {
+    return res.status(400).json({ message: "All fields are required." });
+  }
+
+  const user = await User.findById(id).select("+password").exec();
+  if (!user) return res.status(404).json({ message: "User not found." });
+
+  // Security: Only allow users to change their own password
+  if (req.user._id.toString() !== id) {
+    return res.status(403).json({ message: "Forbidden: You can only change your own password." });
+  }
+
+  const match = await bcrypt.compare(currentPassword, user.password);
+  if (!match) {
+    return res.status(400).json({ message: "Current password is incorrect." });
+  }
+
+  user.password = await bcrypt.hash(newPassword, 10);
+  user.updatedAt = new Date();
+
+  // Log activity
+  user.activities.unshift({
+    action: "Password Change",
+    details: "User password updated manually from settings",
+    timestamp: new Date(),
+  });
+  if (user.activities.length > 20) user.activities = user.activities.slice(0, 20);
+
+  await user.save();
+
+  res.json({ message: "Password changed successfully." });
+});
+
 module.exports = {
   getAllUsers,
   getUserById,
@@ -334,4 +392,5 @@ module.exports = {
   updateKycStatus,
   submitKyc,
   getKycSubmissions,
+  changePassword,
 };
