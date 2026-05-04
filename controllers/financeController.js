@@ -10,6 +10,14 @@ const initializeDeposit = asyncHandler(async (req, res) => {
   const { amount, reference: frontendReference } = req.body;
   const user = req.user;
 
+  const dbUser = await User.findById(user._id);
+  if (dbUser.kycStatus !== "VERIFIED") {
+    return res.status(403).json({ 
+      success: false, 
+      message: "KYC verification required. Please verify your identity to enable deposits." 
+    });
+  }
+
   if (!amount || amount <= 0) {
     return res.status(400).json({ success: false, message: "Invalid amount" });
   }
@@ -48,50 +56,7 @@ const initializeDeposit = asyncHandler(async (req, res) => {
   }
 });
 
-// @desc    Instant Deposit (Bypass Paystack for testing)
-// @route   POST /api/finance/deposit/instant
-// @access  Private
-const instantDeposit = asyncHandler(async (req, res) => {
-  const { amount } = req.body;
-  const user = req.user;
 
-  if (process.env.NODE_ENV === "Production") {
-    return res.status(403).json({ success: false, message: "Instant deposit is only available in Development mode" });
-  }
-
-  if (!amount || amount <= 0) {
-    return res.status(400).json({ success: false, message: "Invalid amount" });
-  }
-
-  console.log(`[Finance] Processing instant deposit for user ${user._id} amount: ${amount}`);
-
-  const reference = `INST-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-
-  // Create a completed transaction record
-  const transaction = await Transaction.create({
-    user: user._id,
-    amount: amount,
-    type: "Wallet_Topup",
-    status: "Completed",
-    reference,
-    description: "Instant Wallet Top-up (Bypass)",
-  });
-
-  // Update user balance atomically
-  const updatedUser = await User.findByIdAndUpdate(
-    user._id,
-    { $inc: { walletBalance: amount } },
-    { new: true }
-  );
-
-  console.log(`[Finance] User ${user._id} balance updated instantly. New balance: ${updatedUser.walletBalance}`);
-
-  res.status(200).json({
-    success: true,
-    message: "Instant deposit successful",
-    data: transaction
-  });
-});
 
 // @desc    Verify Paystack Payment
 // @route   GET /api/finance/deposit/verify/:reference
@@ -345,12 +310,19 @@ const requestWithdrawal = asyncHandler(async (req, res) => {
   const { amount, bankName, accountNumber, accountName } = req.body;
   const user = req.user;
 
+  const dbUser = await User.findById(user._id);
+  if (dbUser.kycStatus !== "VERIFIED") {
+    return res.status(403).json({ 
+      success: false, 
+      message: "KYC verification required. Please verify your identity to enable withdrawals." 
+    });
+  }
+
   if (!amount || amount <= 0) {
     return res.status(400).json({ success: false, message: "Invalid amount" });
   }
 
   // Check if user has sufficient balance
-  const dbUser = await User.findById(user._id);
   if (dbUser.walletBalance < amount) {
     return res.status(400).json({ success: false, message: "Insufficient balance" });
   }
@@ -433,7 +405,6 @@ const processWithdrawal = asyncHandler(async (req, res) => {
 module.exports = {
   initializeDeposit,
   verifyDeposit,
-  instantDeposit,
   getUserTransactions,
   getAllTransactions,
   getFinancialSummary,

@@ -7,13 +7,13 @@ const asyncHandler = require("express-async-handler");
 // @access  Private
 const getStorageOperations = asyncHandler(async (req, res) => {
   const { roles, user } = req;
-  
+
   let query = {};
-  
+
   // If user is a regular user (not admin or manager), show only their operations
   const isAdmin = roles.includes("Admin");
   const isManager = roles.includes("Warehouse_Manager");
-  
+
   if (!isAdmin && !isManager) {
     query.user = user._id;
   }
@@ -23,7 +23,7 @@ const getStorageOperations = asyncHandler(async (req, res) => {
     .populate("warehouse", "name location")
     .populate("agent", "firstName lastName")
     .sort({ timestamp: -1 });
-  
+
   res.json(operations);
 });
 
@@ -41,7 +41,7 @@ const createStorageOperation = asyncHandler(async (req, res) => {
   if (type === "DEPOSIT") {
     const wh = await Warehouse.findById(warehouse);
     if (wh && wh.availableCapacity < quantity) {
-        return res.status(400).json({ message: "Insufficient warehouse capacity" });
+      return res.status(400).json({ message: "Insufficient warehouse capacity" });
     }
     // Update available capacity
     await Warehouse.findByIdAndUpdate(warehouse, { $inc: { availableCapacity: -quantity } });
@@ -67,7 +67,7 @@ const createStorageOperation = asyncHandler(async (req, res) => {
 // @access  Private
 const updateStorageOperation = asyncHandler(async (req, res) => {
   const { id } = req.params;
-  
+
   const operation = await Storage.findById(id);
   if (!operation) {
     return res.status(404).json({ message: "Storage operation not found" });

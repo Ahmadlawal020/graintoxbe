@@ -4,7 +4,6 @@ const verifyJWT = require("../middleware/verifyJWT");
 const {
   initializeDeposit,
   verifyDeposit,
-  instantDeposit,
   getUserTransactions,
   getAllTransactions,
   getFinancialSummary,
@@ -23,7 +22,7 @@ router.use(verifyJWT);
 
 // User routes
 router.post("/deposit/initialize", initializeDeposit);
-router.post("/deposit/instant", instantDeposit);
+
 router.post("/trade", executeTrade);
 router.get("/trades", getUserTrades);
 router.get("/deposit/verify/:reference", verifyDeposit);
