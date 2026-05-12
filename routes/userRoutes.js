@@ -11,6 +11,7 @@ const {
   getDepartments,
   updateKycStatus,
   submitKyc,
+  cancelKyc,
   getKycSubmissions,
   changePassword,
 } = require("../controllers/userController");
@@ -30,6 +31,7 @@ router.get("/departments", getDepartments);
 router.get("/kyc", getKycSubmissions);
 router.patch("/kyc/:id", updateKycStatus);
 router.post("/kyc/submit/:id", submitKyc);
+router.post("/kyc/cancel/:id", cancelKyc);
 router.post("/change-password", changePassword);
 
 // Main route for CRUD on users

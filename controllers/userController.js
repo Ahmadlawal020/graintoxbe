@@ -101,22 +101,61 @@ const submitKyc = asyncHandler(async (req, res) => {
   const { id } = req.params;
   const { kycDocType, kycDocumentUrl, kycDocumentBackUrl, kycLivePhotoUrl } = req.body;
 
-  const user = await User.findById(id).exec();
-  if (!user) return res.status(404).json({ message: "User not found." });
+  const updatedUser = await User.findByIdAndUpdate(
+    id,
+    {
+      kycDocType,
+      kycDocumentUrl,
+      kycDocumentBackUrl,
+      kycLivePhotoUrl,
+      kycStatus: "UNDER_REVIEW",
+      kycSubmittedAt: new Date(),
+      updatedAt: new Date(),
+    },
+    { new: true, runValidators: true }
+  ).exec();
 
-  user.kycDocType = kycDocType;
-  user.kycDocumentUrl = kycDocumentUrl;
-  user.kycDocumentBackUrl = kycDocumentBackUrl;
-  user.kycLivePhotoUrl = kycLivePhotoUrl;
-  user.kycStatus = "UNDER_REVIEW";
-  user.kycSubmittedAt = new Date();
-  user.updatedAt = new Date();
-
-  await user.save();
+  if (!updatedUser) return res.status(404).json({ message: "User not found." });
 
   res.json({
     success: true,
     message: "KYC documents submitted successfully and are now under review.",
+    user: {
+      kycStatus: updatedUser.kycStatus,
+      kycDocType: updatedUser.kycDocType
+    }
+  });
+});
+
+// @desc    Cancel KYC submission
+// @route   POST /api/users/kyc/cancel/:id
+// @access  Private
+const cancelKyc = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+
+  const updatedUser = await User.findByIdAndUpdate(
+    id,
+    {
+      $set: {
+        kycStatus: "PENDING",
+        updatedAt: new Date()
+      },
+      $unset: {
+        kycDocType: "",
+        kycDocumentUrl: "",
+        kycDocumentBackUrl: "",
+        kycLivePhotoUrl: "",
+        kycSubmittedAt: ""
+      }
+    },
+    { new: true }
+  ).exec();
+
+  if (!updatedUser) return res.status(404).json({ message: "User not found." });
+
+  res.json({
+    success: true,
+    message: "KYC submission has been cancelled and reset.",
   });
 });
 
@@ -391,6 +430,7 @@ module.exports = {
   getDepartments,
   updateKycStatus,
   submitKyc,
+  cancelKyc,
   getKycSubmissions,
   changePassword,
 };
