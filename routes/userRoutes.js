@@ -23,13 +23,13 @@ const { checkRole } = require("../middleware/roleMiddleware");
 router.use(verifyJWT);
 
 // Role-specific endpoints
-router.get("/managers", getAllManagers);
-router.get("/platform", getAllPlatformUsers);
-router.get("/departments", getDepartments);
+router.get("/managers", checkRole(["Admin"]), getAllManagers);
+router.get("/platform", checkRole(["Admin", "Warehouse_Manager"]), getAllPlatformUsers);
+router.get("/departments", checkRole(["Admin"]), getDepartments);
 
 // KYC management
-router.get("/kyc", getKycSubmissions);
-router.patch("/kyc/:id", updateKycStatus);
+router.get("/kyc", checkRole(["Admin"]), getKycSubmissions);
+router.patch("/kyc/:id", checkRole(["Admin"]), updateKycStatus);
 router.post("/kyc/submit/:id", submitKyc);
 router.post("/kyc/cancel/:id", cancelKyc);
 router.post("/change-password", changePassword);

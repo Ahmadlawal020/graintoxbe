@@ -6,6 +6,7 @@ const { logger } = require("./middleware/logger");
 const errorHandler = require("./middleware/errorHandler");
 const cookieParser = require("cookie-parser");
 const cors = require("cors");
+const rateLimit = require("express-rate-limit");
 const corsOptions = require("./config/corsOptions");
 const connectDB = require("./config/dbConn");
 
@@ -14,11 +15,26 @@ connectDB();
 // Middleware
 app.use(logger);
 app.use(cors(corsOptions));
-app.use(express.json({
-  verify: (req, res, buf) => {
-    req.rawBody = buf;
-  }
-}));
+app.use(
+  rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: parseInt(process.env.API_LIMIT_MAX, 10) || 1000,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: {
+      success: false,
+      message: "Too many requests. Please try again shortly.",
+    },
+  }),
+);
+app.use(
+  express.json({
+    limit: process.env.JSON_BODY_LIMIT || "1mb",
+    verify: (req, res, buf) => {
+      req.rawBody = buf;
+    },
+  }),
+);
 app.use(cookieParser());
 
 // Serve static files from the "public" directory

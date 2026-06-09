@@ -13,7 +13,7 @@ const transactionSchema = new mongoose.Schema(
     },
     type: {
       type: String,
-      enum: ["Deposit", "Withdrawal", "Trade_Buy", "Trade_Sell", "Wallet_Topup"],
+      enum: ["Deposit", "Withdrawal", "Trade_Buy", "Trade_Sell", "Wallet_Topup", "Wallet_To_Trading", "Trading_To_Wallet"],
       required: true,
     },
     status: {
@@ -24,6 +24,7 @@ const transactionSchema = new mongoose.Schema(
     reference: {
       type: String, // Paystack reference
       unique: true,
+      sparse: true,
     },
     paymentMethod: {
       type: String,
@@ -34,5 +35,8 @@ const transactionSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
+
+transactionSchema.index({ user: 1, createdAt: -1 });
+transactionSchema.index({ type: 1, status: 1, createdAt: -1 });
 
 module.exports = mongoose.model("Transaction", transactionSchema);

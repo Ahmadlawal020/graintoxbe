@@ -43,6 +43,7 @@ const userSchema = new mongoose.Schema(
       lowercase: true,
     },
     password: { type: String, required: true, select: false },
+    refreshToken: { type: String, select: false },
     passwordResetToken: String,
     passwordResetExpires: Date,
     lastLogin: Date,
@@ -50,6 +51,7 @@ const userSchema = new mongoose.Schema(
     // Platform-specific
     department: String,
     walletBalance: { type: Number, default: 0 },
+    tradingBalance: { type: Number, default: 0 },
     assignedWarehouse: [String],
 
     // Profile Details
@@ -113,5 +115,8 @@ const userSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
+
+userSchema.index({ "holdings.tokenSymbol": 1 });
+userSchema.index({ status: 1, isActive: 1 });
 
 module.exports = mongoose.model("User", userSchema);

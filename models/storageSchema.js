@@ -7,6 +7,10 @@ const storageSchema = new mongoose.Schema(
       required: true, 
       enum: ["DEPOSIT", "WITHDRAWAL", "TRANSFER"] 
     },
+    transferDirection: {
+      type: String,
+      enum: ["STORAGE_TO_TRADING", "TRADING_TO_STORAGE"],
+    },
     commodity: { 
       type: mongoose.Schema.Types.ObjectId, 
       ref: "Crop", 
@@ -65,5 +69,8 @@ const storageSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
+
+storageSchema.index({ user: 1, commodity: 1, warehouse: 1, createdAt: -1 });
+storageSchema.index({ transferDirection: 1, createdAt: -1 });
 
 module.exports = mongoose.model("Storage", storageSchema);

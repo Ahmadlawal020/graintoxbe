@@ -17,4 +17,7 @@ const cropSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+cropSchema.index({ tokenSymbol: 1 }, { unique: true });
+cropSchema.index({ category: 1, name: 1 });
+
 module.exports = mongoose.model("Crop", cropSchema);

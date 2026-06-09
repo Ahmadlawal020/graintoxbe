@@ -2,6 +2,17 @@ const User = require("../models/userSchema");
 const bcrypt = require("bcryptjs");
 const asyncHandler = require("express-async-handler");
 
+const isAdminRequest = (req) => req.roles?.includes("Admin");
+const isSelfOrAdmin = (req, id) => req.user?._id?.toString() === id?.toString() || isAdminRequest(req);
+
+const assignDefinedFields = (target, source, fields) => {
+  fields.forEach((field) => {
+    if (source[field] !== undefined) {
+      target[field] = source[field];
+    }
+  });
+};
+
 // @desc    Get all users
 // @route   GET /api/users
 // @access  Private
@@ -101,6 +112,10 @@ const submitKyc = asyncHandler(async (req, res) => {
   const { id } = req.params;
   const { kycDocType, kycDocumentUrl, kycDocumentBackUrl, kycLivePhotoUrl } = req.body;
 
+  if (!isSelfOrAdmin(req, id)) {
+    return res.status(403).json({ message: "Forbidden: You can only submit KYC for your own account." });
+  }
+
   const updatedUser = await User.findByIdAndUpdate(
     id,
     {
@@ -132,6 +147,10 @@ const submitKyc = asyncHandler(async (req, res) => {
 // @access  Private
 const cancelKyc = asyncHandler(async (req, res) => {
   const { id } = req.params;
+
+  if (!isSelfOrAdmin(req, id)) {
+    return res.status(403).json({ message: "Forbidden: You can only cancel KYC for your own account." });
+  }
 
   const updatedUser = await User.findByIdAndUpdate(
     id,
@@ -293,22 +312,61 @@ const updateUser = asyncHandler(async (req, res) => {
     ...otherFields
   } = req.body;
 
-  if (!id || !email) {
-    return res.status(400).json({ message: "User ID and email are required." });
+  if (!id) {
+    return res.status(400).json({ message: "User ID is required." });
   }
 
   const user = await User.findById(id).exec();
   if (!user) return res.status(404).json({ message: "User not found." });
 
-  const duplicateEmail = await User.findOne({ email }).lean().exec();
-  if (duplicateEmail && duplicateEmail._id.toString() !== id) {
-    return res.status(409).json({ message: "Email already in use." });
+  const isAdmin = isAdminRequest(req);
+  if (!isAdmin && req.user._id.toString() !== id.toString()) {
+    return res.status(403).json({ message: "Forbidden: You can only update your own profile." });
+  }
+
+  if (email) {
+    const duplicateEmail = await User.findOne({ email }).lean().exec();
+    if (duplicateEmail && duplicateEmail._id.toString() !== id) {
+      return res.status(409).json({ message: "Email already in use." });
+    }
+  }
+
+  if (!isAdmin) {
+    assignDefinedFields(user, req.body, [
+      "firstName",
+      "lastName",
+      "phone",
+      "alternatePhone",
+      "address",
+      "preferredLanguage",
+      "receiveSMS",
+      "receiveEmail",
+      "dateOfBirth",
+      "maritalStatus",
+      "bloodGroup",
+      "gender",
+      "title",
+      "farmLocation",
+      "cropTypes",
+      "bankAccount",
+    ]);
+
+    user.updatedAt = new Date();
+    user.activities.unshift({
+      action: "Profile Update",
+      details: "Profile information modified by user",
+      timestamp: new Date(),
+    });
+    if (user.activities.length > 20) user.activities = user.activities.slice(0, 20);
+
+    await user.save();
+    return res.json({ message: "Profile updated successfully." });
   }
 
   user.userId = userId ?? user.userId;
   user.firstName = firstName ?? user.firstName;
   user.lastName = lastName ?? user.lastName;
-  user.email = email;
+  user.email = email ?? user.email;
   user.phone = phone ?? user.phone;
   user.gender = gender ?? user.gender;
   user.department = department ?? user.department;
@@ -335,12 +393,6 @@ const updateUser = asyncHandler(async (req, res) => {
   }
 
   // ✅ Conditionally assign other dynamic fields
-  for (const [key, value] of Object.entries(otherFields)) {
-    if (value !== undefined) {
-      user[key] = value;
-    }
-  }
-
   if (password) {
     user.password = await bcrypt.hash(password, 10);
   }

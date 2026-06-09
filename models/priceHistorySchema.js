@@ -27,4 +27,7 @@ const priceHistorySchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+priceHistorySchema.index({ crop: 1, createdAt: -1 });
+priceHistorySchema.index({ symbol: 1, createdAt: -1 });
+
 module.exports = mongoose.model("PriceHistory", priceHistorySchema);

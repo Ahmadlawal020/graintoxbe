@@ -166,11 +166,12 @@ const otpService = require("../services/otpService");
 
 const ACCESS_TOKEN_EXPIRES_IN = "15m";
 const REFRESH_TOKEN_EXPIRES_IN = "1d";
+const isProduction = process.env.NODE_ENV?.toLowerCase() === "production";
 
 const cookieOptions = {
   httpOnly: true,
-  secure: process.env.NODE_ENV === "Production",
-  sameSite: process.env.NODE_ENV === "Production" ? "None" : "Lax",
+  secure: isProduction,
+  sameSite: isProduction ? "None" : "Lax",
   maxAge: 24 * 60 * 60 * 1000, // 1 day
 };
 

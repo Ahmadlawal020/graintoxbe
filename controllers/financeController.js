@@ -2,6 +2,12 @@ const Transaction = require("../models/transactionSchema");
 const User = require("../models/userSchema");
 const asyncHandler = require("express-async-handler");
 const paystackService = require("../services/paystack.service");
+const mongoose = require("mongoose");
+
+const toPositiveAmount = (value) => {
+  const amount = Number(value);
+  return Number.isFinite(amount) && amount > 0 ? Math.round((amount + Number.EPSILON) * 100) / 100 : null;
+};
 
 // @desc    Initialize Paystack Payment
 // @route   POST /api/finance/deposit/initialize
@@ -402,6 +408,93 @@ const processWithdrawal = asyncHandler(async (req, res) => {
   });
 });
 
+// @desc    Move funds between wallet and trading balance
+// @route   POST /api/finance/trading/transfer
+// @access  Private
+const transferTradingFunds = asyncHandler(async (req, res) => {
+  const { amount, direction } = req.body;
+  const transferAmount = toPositiveAmount(amount);
+
+  if (!transferAmount || !["wallet_to_trading", "trading_to_wallet"].includes(direction)) {
+    return res.status(400).json({ success: false, message: "Invalid transfer request" });
+  }
+
+  const session = await mongoose.startSession();
+
+  try {
+    let updatedUser;
+    let transaction;
+
+    await session.withTransaction(async () => {
+      const user = await User.findById(req.user._id).session(session);
+      if (!user) {
+        const error = new Error("User not found");
+        error.statusCode = 404;
+        throw error;
+      }
+
+      if (user.kycStatus !== "VERIFIED") {
+        const error = new Error("KYC verification required before moving funds to trading.");
+        error.statusCode = 403;
+        throw error;
+      }
+
+      user.tradingBalance = user.tradingBalance || 0;
+
+      if (direction === "wallet_to_trading") {
+        if (user.walletBalance < transferAmount) {
+          const error = new Error("Insufficient wallet balance");
+          error.statusCode = 400;
+          throw error;
+        }
+
+        user.walletBalance -= transferAmount;
+        user.tradingBalance += transferAmount;
+      } else {
+        if (user.tradingBalance < transferAmount) {
+          const error = new Error("Insufficient trading balance");
+          error.statusCode = 400;
+          throw error;
+        }
+
+        user.tradingBalance -= transferAmount;
+        user.walletBalance += transferAmount;
+      }
+
+      user.walletBalance = toPositiveAmount(user.walletBalance) || 0;
+      user.tradingBalance = toPositiveAmount(user.tradingBalance) || 0;
+      updatedUser = await user.save({ session });
+
+      const [createdTransaction] = await Transaction.create([{
+        user: req.user._id,
+        amount: transferAmount,
+        type: direction === "wallet_to_trading" ? "Wallet_To_Trading" : "Trading_To_Wallet",
+        status: "Completed",
+        description: direction === "wallet_to_trading"
+          ? `Moved NGN ${transferAmount.toLocaleString()} from wallet to trading`
+          : `Moved NGN ${transferAmount.toLocaleString()} from trading to wallet`,
+      }], { session });
+
+      transaction = createdTransaction;
+    });
+
+    res.json({
+      success: true,
+      message: "Transfer completed successfully",
+      walletBalance: updatedUser.walletBalance,
+      tradingBalance: updatedUser.tradingBalance,
+      transaction,
+    });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.statusCode ? error.message : "Transfer could not be completed",
+    });
+  } finally {
+    await session.endSession();
+  }
+});
+
 module.exports = {
   initializeDeposit,
   verifyDeposit,
@@ -411,4 +504,5 @@ module.exports = {
   handleWebhook,
   requestWithdrawal,
   processWithdrawal,
+  transferTradingFunds,
 };
