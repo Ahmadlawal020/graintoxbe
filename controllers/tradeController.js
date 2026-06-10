@@ -145,6 +145,7 @@ const executeTrade = asyncHandler(async (req, res) => {
         amount: totalCost,
         type: type === "buy" ? "Trade_Buy" : "Trade_Sell",
         status: "Completed",
+        reference: `TD-${Date.now()}-${Math.random().toString(36).substring(7).toUpperCase()}`,
         description: `${type.toUpperCase()} ${tradeAmount} ${tokenSymbol} @ NGN ${tradePrice.toLocaleString()}`,
         metadata: {
           tradeId: trade._id,

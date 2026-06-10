@@ -24,8 +24,8 @@ const initializeDeposit = asyncHandler(async (req, res) => {
     });
   }
 
-  if (!amount || amount <= 0) {
-    return res.status(400).json({ success: false, message: "Invalid amount" });
+  if (!amount || amount < 1000) {
+    return res.status(400).json({ success: false, message: "Minimum deposit amount is NGN 1,000" });
   }
 
   const cleanReference = frontendReference?.trim();
@@ -316,52 +316,77 @@ const requestWithdrawal = asyncHandler(async (req, res) => {
   const { amount, bankName, accountNumber, accountName } = req.body;
   const user = req.user;
 
-  const dbUser = await User.findById(user._id);
-  if (dbUser.kycStatus !== "VERIFIED") {
-    return res.status(403).json({ 
-      success: false, 
-      message: "KYC verification required. Please verify your identity to enable withdrawals." 
-    });
+  if (!amount || amount < 1000) {
+    return res.status(400).json({ success: false, message: "Minimum withdrawal amount is NGN 1,000" });
   }
 
-  if (!amount || amount <= 0) {
-    return res.status(400).json({ success: false, message: "Invalid amount" });
-  }
+  const session = await mongoose.startSession();
 
-  // Check if user has sufficient balance
-  if (dbUser.walletBalance < amount) {
-    return res.status(400).json({ success: false, message: "Insufficient balance" });
-  }
+  try {
+    let transaction;
 
-  // Create pending transaction without deducting balance yet
-  // We only check if they HAVE enough right now to prevent frivolous requests
-  const transaction = await Transaction.create({
-    user: user._id,
-    amount,
-    type: "Withdrawal",
-    status: "Pending",
-    reference: `WD-${Date.now()}-${Math.random().toString(36).substring(7).toUpperCase()}`,
-    description: `Withdrawal request to ${bankName || dbUser.bankAccount?.bankName || "bank account"}`,
-    metadata: {
-      bankDetails: {
-        bankName: bankName || dbUser.bankAccount?.bankName,
-        accountNumber: accountNumber || dbUser.bankAccount?.accountNumber,
-        accountName: accountName || dbUser.bankAccount?.accountName,
+    await session.withTransaction(async () => {
+      const dbUser = await User.findById(user._id).session(session);
+      if (!dbUser) {
+        const error = new Error("User not found");
+        error.statusCode = 404;
+        throw error;
       }
-    }
-  });
 
-  // Update bank details if provided
-  if (bankName && accountNumber && accountName) {
-    dbUser.bankAccount = { bankName, accountNumber, accountName };
-    await dbUser.save();
+      if (dbUser.kycStatus !== "VERIFIED") {
+        const error = new Error("KYC verification required. Please verify your identity to enable withdrawals.");
+        error.statusCode = 403;
+        throw error;
+      }
+
+      if (dbUser.walletBalance < amount) {
+        const error = new Error("Insufficient balance");
+        error.statusCode = 400;
+        throw error;
+      }
+
+      // Deduct balance immediately so funds cannot be used while withdrawal is pending
+      dbUser.walletBalance -= amount;
+
+      // Update bank details if provided
+      if (bankName && accountNumber && accountName) {
+        dbUser.bankAccount = { bankName, accountNumber, accountName };
+      }
+
+      await dbUser.save({ session });
+
+      const [createdTx] = await Transaction.create([{
+        user: user._id,
+        amount,
+        type: "Withdrawal",
+        status: "Pending",
+        reference: `WD-${Date.now()}-${Math.random().toString(36).substring(7).toUpperCase()}`,
+        description: `Withdrawal request to ${bankName || dbUser.bankAccount?.bankName || "bank account"}`,
+        metadata: {
+          bankDetails: {
+            bankName: bankName || dbUser.bankAccount?.bankName,
+            accountNumber: accountNumber || dbUser.bankAccount?.accountNumber,
+            accountName: accountName || dbUser.bankAccount?.accountName,
+          }
+        }
+      }], { session });
+
+      transaction = createdTx;
+    });
+
+    res.status(201).json({
+      success: true,
+      message: "Withdrawal request submitted. Funds have been reserved.",
+      data: transaction
+    });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.statusCode ? error.message : "Withdrawal request could not be completed",
+    });
+  } finally {
+    await session.endSession();
   }
-
-  res.status(201).json({
-    success: true,
-    message: "Withdrawal request submitted successfully",
-    data: transaction
-  });
 });
 
 // @desc    Process Withdrawal (Admin)
@@ -374,38 +399,118 @@ const processWithdrawal = asyncHandler(async (req, res) => {
     return res.status(400).json({ success: false, message: "Invalid status. Must be Completed or Failed." });
   }
 
-  const transaction = await Transaction.findById(transactionId);
-  if (!transaction || transaction.type !== "Withdrawal") {
-    return res.status(404).json({ success: false, message: "Withdrawal transaction not found" });
+  const session = await mongoose.startSession();
+
+  try {
+    let updatedTransaction;
+
+    await session.withTransaction(async () => {
+      const transaction = await Transaction.findById(transactionId).session(session);
+      if (!transaction || transaction.type !== "Withdrawal") {
+        const error = new Error("Withdrawal transaction not found");
+        error.statusCode = 404;
+        throw error;
+      }
+
+      if (transaction.status !== "Pending") {
+        const error = new Error("Transaction already processed");
+        error.statusCode = 400;
+        throw error;
+      }
+
+      // Balance was already deducted when the withdrawal was requested.
+      // If rejected, refund the amount back to the user's wallet.
+      if (status === "Failed") {
+        await User.findByIdAndUpdate(
+          transaction.user,
+          { $inc: { walletBalance: transaction.amount } },
+          { session }
+        );
+      }
+
+      transaction.status = status;
+      if (notes) transaction.description += ` - Admin Note: ${notes}`;
+      await transaction.save({ session });
+
+      updatedTransaction = transaction;
+    });
+
+    res.json({
+      success: true,
+      message: `Withdrawal request ${status.toLowerCase()} successfully`,
+      data: updatedTransaction
+    });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.statusCode ? error.message : "Could not process withdrawal",
+    });
+  } finally {
+    await session.endSession();
   }
+});
 
-  if (transaction.status !== "Pending") {
-    return res.status(400).json({ success: false, message: "Transaction already processed" });
+// @desc    Cancel Withdrawal (User)
+// @route   POST /api/finance/withdrawal/cancel/:id
+// @access  Private
+const cancelWithdrawal = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const userId = req.user._id;
+
+  const session = await mongoose.startSession();
+
+  try {
+    let updatedTransaction;
+
+    await session.withTransaction(async () => {
+      const transaction = await Transaction.findById(id).session(session);
+
+      if (!transaction || transaction.type !== "Withdrawal") {
+        const error = new Error("Withdrawal transaction not found");
+        error.statusCode = 404;
+        throw error;
+      }
+
+      // Ensure the user owns this transaction
+      if (transaction.user.toString() !== userId.toString()) {
+        const error = new Error("Unauthorized");
+        error.statusCode = 403;
+        throw error;
+      }
+
+      if (transaction.status !== "Pending") {
+        const error = new Error("Only pending withdrawals can be cancelled");
+        error.statusCode = 400;
+        throw error;
+      }
+
+      // Refund the amount back to user's wallet
+      await User.findByIdAndUpdate(
+        userId,
+        { $inc: { walletBalance: transaction.amount } },
+        { session }
+      );
+
+      transaction.status = "Failed";
+      transaction.description += " - Cancelled by user";
+      await transaction.save({ session });
+
+      updatedTransaction = transaction;
+    });
+
+    res.json({
+      success: true,
+      message: "Withdrawal cancelled. Funds have been returned to your wallet.",
+      data: updatedTransaction
+    });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.statusCode ? error.message : "Could not cancel withdrawal",
+    });
+  } finally {
+    await session.endSession();
   }
-
-  // If approved, deduct the user's balance
-  if (status === "Completed") {
-    const user = await User.findById(transaction.user);
-    if (!user || user.walletBalance < transaction.amount) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "Approval failed: User no longer has sufficient balance." 
-      });
-    }
-    
-    user.walletBalance -= transaction.amount;
-    await user.save();
-  }
-
-  transaction.status = status;
-  if (notes) transaction.description += ` - Admin Note: ${notes}`;
-  await transaction.save();
-
-  res.json({
-    success: true,
-    message: `Withdrawal request ${status.toLowerCase()} successfully`,
-    data: transaction
-  });
 });
 
 // @desc    Move funds between wallet and trading balance
@@ -470,6 +575,7 @@ const transferTradingFunds = asyncHandler(async (req, res) => {
         amount: transferAmount,
         type: direction === "wallet_to_trading" ? "Wallet_To_Trading" : "Trading_To_Wallet",
         status: "Completed",
+        reference: `TR-${Date.now()}-${Math.random().toString(36).substring(7).toUpperCase()}`,
         description: direction === "wallet_to_trading"
           ? `Moved NGN ${transferAmount.toLocaleString()} from wallet to trading`
           : `Moved NGN ${transferAmount.toLocaleString()} from trading to wallet`,
@@ -504,5 +610,6 @@ module.exports = {
   handleWebhook,
   requestWithdrawal,
   processWithdrawal,
+  cancelWithdrawal,
   transferTradingFunds,
 };
